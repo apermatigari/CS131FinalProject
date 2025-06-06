@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+import pygame, math, random, sys
+
+# ─── CONFIG ────────────────────────────────────────────────────────────────────
+WHEEL     = [0,32,15,19,4,21,2,25,17,34,6,27,13,36,
+             11,30,8,23,10,5,24,16,33,1,20,14,31,
+             9,22,18,29,7,28,12,35,3,26]
+RED_NUMS  = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
+
+# RGB colors
+GREEN, RED, BLACK = (0,180,0), (200,0,0), (0,0,0)
+WHITE, BG, POINTER = (255,255,255), (30,30,30), (240,240,240)
+
+WIDTH, HEIGHT = 800, 800
+RADIUS        = min(WIDTH,HEIGHT)//2 - 50
+CENTER        = (WIDTH//2, HEIGHT//2)
+FPS           = 60
+
+# pointer sits at “north” which in our clockwise‐from‐east math is 270°
+POINTER_ANGLE_CW = 270
+
+# ─── BET CONFIG ────────────────────────────────────────────────────────────────
+COIN_VALUES = {
+    'nickel':   5,     # $5
+    'dime':     10,    # $10
+    'quarter':  25,    # $25
+    'half':     50,    # $50
+}
+
+# Base cheat-win probabilities (we’ll adjust these dynamically)
+BASE_WIN_PROB = {
+    'nickel':   0.90,   # initial cheat-win chance for a nickel
+    'dime':     0.75,
+    'quarter':  0.50,
+    'half':     0.25,
+}
+
+# How much to bump/lower odds after each result:
+PROB_ADJUST = 0.05  # 5%
+
+# Initialize current win-probabilities from base:
+current_win_prob = BASE_WIN_PROB.copy()
+
+# ─── STATE ─────────────────────────────────────────────────────────────────────
+N             = len(WHEEL)
+wedge_deg     = 360 / N
+rotation      = 0.0   # total degrees spun (clockwise)
+angular_vel   = 0.0   # degrees/frame (clockwise)
+deceleration  = 0.0   # degrees/frame²
+spinning      = False
+result        = None  # final number this spin
+
+# Start with $100 balance
+current_balance = 100.0
+awaiting_bet   = True
+bet_number     = None
+bet_coin       = None   # which coin user picked this round
+bet_amount     = 0.0
+cheat_outcome  = False  # True = “force a win,” False = normal
+rounds_played  = 0      # how many spins the user has done so far
+near_miss_rate = 0.10   # 10% of “losing” spins will be a near-miss
+
+# ─── PYGAME SETUP ─────────────────────────────────────────────────────────────
+pygame.init()
+screen = pygame.display.set_mode((WIDTH,HEIGHT))
+pygame.display.set_caption("♣️♦️ Python Roulette ♦️♣️")
+clock  = pygame.time.Clock()
+font   = pygame.font.SysFont(None, 28, bold=True)
+balance_font = pygame.font.SysFont(None, 32, bold=True)
+
+# ─── PRE-DRAW THE WHEEL ─────────────────────────────────────────────────────────
+wheel_surf = pygame.Surface((2*RADIUS,2*RADIUS), pygame.SRCALPHA)
+cx, cy = RADIUS, RADIUS
+
+for i, num in enumerate(WHEEL):
+    a0 = math.radians(i * wedge_deg)
+    a1 = math.radians((i+1) * wedge_deg)
+    p1 = (cx + RADIUS*math.cos(a0), cy + RADIUS*math.sin(a0))
+    p2 = (cx + RADIUS*math.cos(a1), cy + RADIUS*math.sin(a1))
+    pts = [(cx,cy), p1, p2]
+    color = GREEN if num == 0 else RED if num in RED_NUMS else BLACK
+    pygame.draw.polygon(wheel_surf, color, pts)
+    pygame.draw.polygon(wheel_surf, WHITE, pts, 2)
+
+    am = math.radians((i + 0.5) * wedge_deg)
+    tx = cx + 0.6*RADIUS*math.cos(am)
+    ty = cy + 0.6*RADIUS*math.sin(am)
+    txt_col = BLACK if num == 0 else WHITE
+    txt = font.render(str(num), True, txt_col)
+    wheel_surf.blit(txt, txt.get_rect(center=(tx,ty)))
+
+pointer = [
+    (CENTER[0],          CENTER[1] - RADIUS - 20),
+    (CENTER[0] - 20,     CENTER[1] - RADIUS + 10),
+    (CENTER[0] + 20,     CENTER[1] - RADIUS + 10),
+]
+
+# ─── SPIN CONTROL ──────────────────────────────────────────────────────────────
+def start_spin():
+    global spinning, angular_vel, deceleration, result
+    spinning    = True
+    result      = None
+    angular_vel = random.uniform(15, 30)
+    T           = random.randint(120, 240)
+    deceleration= angular_vel / T
+
+# ─── DYNAMIC CHEAT PROBABILITY ─────────────────────────────────────────────────
+def get_dynamic_win_prob(coin: str) -> float:
+    """
+    Return the current cheat-win probability for a given coin.
+    This simply pulls from the shared `current_win_prob` dict.
+    """
+    return current_win_prob.get(coin, 0.0)
+
+def choose_result_with_near_miss(bet: int, lose_phys: int) -> int:
+    """
+    If the user is supposed to lose physically,
+    we sometimes force a near-miss (land on +1 or −1 wedge)
+    near_miss_rate fraction of the time. Otherwise, pick a random losing number.
+    """
+    if random.random() < near_miss_rate:
+        idx = WHEEL.index(lose_phys)
+        direction = random.choice([-1, +1])
+        new_idx = (idx + direction) % N
+        return WHEEL[new_idx]
+
+    # full-blown random loss (not near-miss)
+    choices = [n for n in WHEEL if n != bet]
+    return random.choice(choices)
+
+# ─── MAIN LOOP ─────────────────────────────────────────────────────────────────
+while True:
+    # Prompt for a new bet if we’re ready
+    if awaiting_bet:
+        if current_balance <= 0:
+            print("You’ve lost it all! Game over.")
+            pygame.quit()
+            sys.exit()
+
+        try:
+            print(f"\n=== PLACE YOUR BET ===    (Current Balance: ${current_balance:.2f})")
+            # 1) Choose a valid bet number (0–36)
+            while True:
+                bn = int(input("Enter bet number (0–36): "))
+                if bn in WHEEL:
+                    bet_number = bn
+                    break
+                print("Invalid number, try again.")
+
+            # 2) Choose a coin type and ensure you can afford it
+            while True:
+                coin = input("Enter coin (nickel, dime, quarter, half): ").strip().lower()
+                if coin in COIN_VALUES:
+                    amt = COIN_VALUES[coin]
+                    if amt > current_balance:
+                        print(f"You only have ${current_balance:.2f}. Pick a smaller coin.")
+                        continue
+                    bet_coin   = coin
+                    bet_amount = amt
+                    break
+                print("Invalid coin. Must be: nickel, dime, quarter, or half.")
+
+            # 3) Compute the cheat-win probability for this exact round:
+            win_prob = get_dynamic_win_prob(bet_coin)
+            cheat_outcome = (random.random() < win_prob)
+
+            awaiting_bet = False
+            print(f"Betting {bet_coin} (${bet_amount:.2f}) on {bet_number}. “Cheat-win” chance this round = {win_prob*100:.1f}%\n")
+
+        except Exception:
+            print("Invalid input. Let's try that again.")
+
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
+        if e.type == pygame.KEYDOWN and e.key == pygame.K_SPACE:
+            if not spinning and not awaiting_bet:
+                start_spin()
+
+    # physics update
+    if spinning:
+        rotation    = (rotation + angular_vel) % 360
+        angular_vel = max(0, angular_vel - deceleration)
+        if angular_vel == 0:
+            spinning = False
+
+            # 1) Compute what the physics-based result would have been
+            best_diff, best_i = 360, None
+            for i in range(N):
+                center_ang = (i + 0.5) * wedge_deg
+                new_ang = (center_ang + rotation) % 360
+                diff = abs((new_ang - POINTER_ANGLE_CW + 180) % 360 - 180)
+                if diff < best_diff:
+                    best_diff, best_i = diff, i
+            phys_result = WHEEL[best_i]
+
+            # 2) Now override with our cheat logic:
+            if cheat_outcome:
+                # user “wins outright”
+                result = bet_number
+            else:
+                # user “loses”—but we might produce a near-miss
+                if phys_result == bet_number:
+                    # If physics actually landed on their bet, force a real random losing wedge (or near miss)
+                    lose_phys = random.choice([n for n in WHEEL if n != bet_number])
+                else:
+                    lose_phys = phys_result
+
+                result = choose_result_with_near_miss(bet_number, lose_phys)
+
+            # 3) Realign the wheel so the pointer lands on `result`
+            target_i   = WHEEL.index(result)
+            center_ang = (target_i + 0.5) * wedge_deg
+            rotation   = (POINTER_ANGLE_CW - center_ang) % 360
+
+            # 4) Adjust balance:
+            if result == bet_number:
+                winnings = bet_amount  # net gain = bet_amount
+                current_balance += winnings
+                print(f"🎉 WIN! You hit {bet_number}. You earn ${winnings:.2f}.")
+            else:
+                current_balance -= bet_amount
+                print(f"😞 LOSS. You lost ${bet_amount:.2f}.")
+
+            rounds_played += 1
+            print(f" → New Balance: ${current_balance:.2f}   (Rounds played: {rounds_played})\n")
+
+            # ─── UPDATE ALL COINS’ WIN CHANCES ───────────────────────────────────
+            if result == bet_number:
+                # user won → lower all coins’ probabilities
+                for c in current_win_prob:
+                    current_win_prob[c] = max(0.0, current_win_prob[c] - PROB_ADJUST)
+            else:
+                # user lost → raise all probabilities
+                for c in current_win_prob:
+                    current_win_prob[c] = min(1.0, current_win_prob[c] + PROB_ADJUST)
+
+            # Ready for next bet
+            awaiting_bet = True
+
+    # draw wheel + pointer
+    screen.fill(BG)
+    rotated = pygame.transform.rotozoom(wheel_surf, -rotation, 1.0)
+    screen.blit(rotated, rotated.get_rect(center=CENTER))
+    pygame.draw.polygon(screen, POINTER, pointer)
+    pygame.draw.polygon(screen, BLACK, pointer, 2)
+
+    # draw current balance at top center
+    balance_text = balance_font.render(f"Balance: ${current_balance:.2f}", True, WHITE)
+    screen.blit(balance_text, balance_text.get_rect(center=(WIDTH//2, 30)))
+
+    # status text at bottom
+    if not spinning:
+        if result is None:
+            txt = "Press [SPACE] to spin"
+        else:
+            outcome = "WON 🥳" if result == bet_number else "LOST 😞"
+            txt = f"🎉 Landed on {result}! You {outcome}"
+        lbl = font.render(txt, True, WHITE)
+        screen.blit(lbl, lbl.get_rect(center=(WIDTH//2, HEIGHT-40)))
+
+    pygame.display.flip()
+    clock.tick(FPS)

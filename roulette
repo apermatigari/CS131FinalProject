@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 import pygame, math, random, sys
 
-# ─── CONFIG ────────────────────────────────────────────────────────────────────
 WHEEL     = [0,32,15,19,4,21,2,25,17,34,6,27,13,36,
              11,30,8,23,10,5,24,16,33,1,20,14,31,
              9,22,18,29,7,28,12,35,3,26]
 RED_NUMS  = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
 
-# RGB colors
+# colors
 GREEN, RED, BLACK = (0,180,0), (200,0,0), (0,0,0)
 WHITE, BG, POINTER = (255,255,255), (30,30,30), (240,240,240)
 
@@ -16,10 +15,8 @@ RADIUS        = min(WIDTH,HEIGHT)//2 - 50
 CENTER        = (WIDTH//2, HEIGHT//2)
 FPS           = 60
 
-# pointer sits at “north” which in our clockwise‐from‐east math is 270°
 POINTER_ANGLE_CW = 270
 
-# ─── BET CONFIG ────────────────────────────────────────────────────────────────
 COIN_VALUES = {
     'nickel':   5,     # $5
     'dime':     10,    # $10
@@ -27,48 +24,47 @@ COIN_VALUES = {
     'half':     50,    # $50
 }
 
-# Base cheat-win probabilities (we’ll adjust these dynamically)
+# Base probabilities, adjusted dynamically later
 BASE_WIN_PROB = {
-    'nickel':   0.90,   # initial cheat-win chance for a nickel
+    'nickel':   0.90,   
     'dime':     0.75,
     'quarter':  0.50,
     'half':     0.25,
 }
 
-# How much to bump/lower odds after each result:
+# lower odds after each result
 PROB_ADJUST = 0.05  # 5%
 
-# Initialize current win-probabilities from base:
+# current win-probabilities
 current_win_prob = BASE_WIN_PROB.copy()
 
-# ─── STATE ─────────────────────────────────────────────────────────────────────
+# Initialize game state
 N             = len(WHEEL)
 wedge_deg     = 360 / N
-rotation      = 0.0   # total degrees spun (clockwise)
-angular_vel   = 0.0   # degrees/frame (clockwise)
-deceleration  = 0.0   # degrees/frame²
+rotation      = 0.0   
+angular_vel   = 0.0   
+deceleration  = 0.0   
 spinning      = False
-result        = None  # final number this spin
+result        = None  
 
-# Start with $100 balance
+# $100 balance at the start
 current_balance = 100.0
 awaiting_bet   = True
 bet_number     = None
-bet_coin       = None   # which coin user picked this round
+bet_coin       = None   
 bet_amount     = 0.0
-cheat_outcome  = False  # True = “force a win,” False = normal
-rounds_played  = 0      # how many spins the user has done so far
-near_miss_rate = 0.10   # 10% of “losing” spins will be a near-miss
+cheat_outcome  = False  
+rounds_played  = 0      
+near_miss_rate = 0.10   
 
-# ─── PYGAME SETUP ─────────────────────────────────────────────────────────────
 pygame.init()
 screen = pygame.display.set_mode((WIDTH,HEIGHT))
-pygame.display.set_caption("♣️♦️ Python Roulette ♦️♣️")
+pygame.display.set_caption("Python Roulette")
 clock  = pygame.time.Clock()
 font   = pygame.font.SysFont(None, 28, bold=True)
 balance_font = pygame.font.SysFont(None, 32, bold=True)
 
-# ─── PRE-DRAW THE WHEEL ─────────────────────────────────────────────────────────
+
 wheel_surf = pygame.Surface((2*RADIUS,2*RADIUS), pygame.SRCALPHA)
 cx, cy = RADIUS, RADIUS
 
@@ -95,7 +91,7 @@ pointer = [
     (CENTER[0] + 20,     CENTER[1] - RADIUS + 10),
 ]
 
-# ─── SPIN CONTROL ──────────────────────────────────────────────────────────────
+
 def start_spin():
     global spinning, angular_vel, deceleration, result
     spinning    = True
@@ -104,7 +100,7 @@ def start_spin():
     T           = random.randint(120, 240)
     deceleration= angular_vel / T
 
-# ─── DYNAMIC CHEAT PROBABILITY ─────────────────────────────────────────────────
+
 def get_dynamic_win_prob(coin: str) -> float:
     """
     Return the current cheat-win probability for a given coin.
@@ -124,13 +120,11 @@ def choose_result_with_near_miss(bet: int, lose_phys: int) -> int:
         new_idx = (idx + direction) % N
         return WHEEL[new_idx]
 
-    # full-blown random loss (not near-miss)
     choices = [n for n in WHEEL if n != bet]
     return random.choice(choices)
 
-# ─── MAIN LOOP ─────────────────────────────────────────────────────────────────
+
 while True:
-    # Prompt for a new bet if we’re ready
     if awaiting_bet:
         if current_balance <= 0:
             print("You’ve lost it all! Game over.")
@@ -139,7 +133,7 @@ while True:
 
         try:
             print(f"\n=== PLACE YOUR BET ===    (Current Balance: ${current_balance:.2f})")
-            # 1) Choose a valid bet number (0–36)
+            # bet number (0–36)
             while True:
                 bn = int(input("Enter bet number (0–36): "))
                 if bn in WHEEL:
@@ -147,7 +141,7 @@ while True:
                     break
                 print("Invalid number, try again.")
 
-            # 2) Choose a coin type and ensure you can afford it
+            # Coin type
             while True:
                 coin = input("Enter coin (nickel, dime, quarter, half): ").strip().lower()
                 if coin in COIN_VALUES:
@@ -160,7 +154,6 @@ while True:
                     break
                 print("Invalid coin. Must be: nickel, dime, quarter, or half.")
 
-            # 3) Compute the cheat-win probability for this exact round:
             win_prob = get_dynamic_win_prob(bet_coin)
             cheat_outcome = (random.random() < win_prob)
 
@@ -178,14 +171,13 @@ while True:
             if not spinning and not awaiting_bet:
                 start_spin()
 
-    # physics update
     if spinning:
         rotation    = (rotation + angular_vel) % 360
         angular_vel = max(0, angular_vel - deceleration)
         if angular_vel == 0:
             spinning = False
 
-            # 1) Compute what the physics-based result would have been
+            
             best_diff, best_i = 360, None
             for i in range(N):
                 center_ang = (i + 0.5) * wedge_deg
@@ -195,51 +187,46 @@ while True:
                     best_diff, best_i = diff, i
             phys_result = WHEEL[best_i]
 
-            # 2) Now override with our cheat logic:
+            # override with cheat logic
             if cheat_outcome:
-                # user “wins outright”
                 result = bet_number
             else:
-                # user “loses”—but we might produce a near-miss
                 if phys_result == bet_number:
-                    # If physics actually landed on their bet, force a real random losing wedge (or near miss)
                     lose_phys = random.choice([n for n in WHEEL if n != bet_number])
                 else:
                     lose_phys = phys_result
 
                 result = choose_result_with_near_miss(bet_number, lose_phys)
 
-            # 3) Realign the wheel so the pointer lands on `result`
+            # Realign the wheel 
             target_i   = WHEEL.index(result)
             center_ang = (target_i + 0.5) * wedge_deg
             rotation   = (POINTER_ANGLE_CW - center_ang) % 360
 
-            # 4) Adjust balance:
+            # Adjust balance
             if result == bet_number:
-                winnings = bet_amount  # net gain = bet_amount
+                winnings = bet_amount  
                 current_balance += winnings
-                print(f"🎉 WIN! You hit {bet_number}. You earn ${winnings:.2f}.")
+                print(f"WIN! You hit {bet_number}. You earn ${winnings:.2f}.")
             else:
                 current_balance -= bet_amount
-                print(f"😞 LOSS. You lost ${bet_amount:.2f}.")
+                print(f"LOSS: You lost ${bet_amount:.2f}.")
 
             rounds_played += 1
             print(f" → New Balance: ${current_balance:.2f}   (Rounds played: {rounds_played})\n")
 
-            # ─── UPDATE ALL COINS’ WIN CHANCES ───────────────────────────────────
             if result == bet_number:
-                # user won → lower all coins’ probabilities
+                # all coins’ probabilities
                 for c in current_win_prob:
                     current_win_prob[c] = max(0.0, current_win_prob[c] - PROB_ADJUST)
             else:
-                # user lost → raise all probabilities
+                # raise all probabilities
                 for c in current_win_prob:
                     current_win_prob[c] = min(1.0, current_win_prob[c] + PROB_ADJUST)
 
             # Ready for next bet
             awaiting_bet = True
 
-    # draw wheel + pointer
     screen.fill(BG)
     rotated = pygame.transform.rotozoom(wheel_surf, -rotation, 1.0)
     screen.blit(rotated, rotated.get_rect(center=CENTER))
@@ -255,8 +242,8 @@ while True:
         if result is None:
             txt = "Press [SPACE] to spin"
         else:
-            outcome = "WON 🥳" if result == bet_number else "LOST 😞"
-            txt = f"🎉 Landed on {result}! You {outcome}"
+            outcome = "WON" if result == bet_number else "LOST"
+            txt = f"Landed on {result}! You {outcome}"
         lbl = font.render(txt, True, WHITE)
         screen.blit(lbl, lbl.get_rect(center=(WIDTH//2, HEIGHT-40)))
 
